@@ -1,0 +1,84 @@
+parameters:
+  - name: docker_architecture_names
+    type: object
+    default:
+      - amd64
+      - arm64
+      # - arm/v7
+  - name: docker_repository_name
+    type: string
+  - name: registry_service_connection_name
+    type: string
+  - name: kafka_versions
+    type: object
+    default:
+      - kafka_version: 2.7.0
+        scala_version: 2.13
+
+stages:
+  - stage: BuildImages
+    displayName: Build base Docker images
+    jobs:
+      - ${{ each value in parameters.docker_architecture_names  }}:
+        - job: BuildImage_${{ replace(value,'/','') }}
+          displayName: Build ${{ value }} docker image
+          steps:
+            - task: DockerInstaller@0
+              inputs:
+                dockerVersion: 20.10.3
+            - task: Bash@3
+              inputs:
+                targetType: inline
+                script: |
+                  docker version
+            - task: Bash@3
+              displayName: Create BuildX environment
+              inputs:
+                targetType: inline
+                script: |
+                  docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+                  docker buildx rm builder
+                  docker buildx create --name builder --driver docker-container --use
+                  docker buildx inspect --bootstrap
+            - task: Docker@2
+              displayName: Log in to Docker Hub
+              inputs:
+                command: login
+                containerRegistry: ${{ parameters.registry_service_connection_name }}
+            - ${{ each version in parameters.kafka_versions }}:
+              - task: Bash@3
+                displayName: Build and Push Docker image for Kafka version ${{ version.scala_version }}-${{ version.kafka_version }}
+                inputs:
+                  targetType: inline
+                  script: |
+                    docker buildx build --build-arg kafka_version=${{ version.kafka_version }} \
+                      --build-arg scala_version=${{ version.scala_version }} \
+                      --push --platform linux/${{ value }} \
+                      -t ${{ parameters.docker_repository_name }}:${{ version.scala_version }}-${{ version.kafka_version }}-$(Build.BuildNumber)-${{ replace(value,'/','') }} \
+                      -t ${{ parameters.docker_repository_name }}:${{ version.scala_version }}-${{ version.kafka_version }}-${{ replace(value,'/','') }} .
+  - stage: BuildManifests
+    displayName: Build Manifests
+    jobs:
+      - ${{ each version in parameters.kafka_versions }}:
+        - job: BuildManifest_${{ replace(version.scala_version,'.','_') }}_${{ replace(version.kafka_version,'.','_') }}
+          displayName: Build manifest for version ${{ version.scala_version }}-${{ version.kafka_version }}
+          steps:
+            - task: Docker@2
+              displayName: Log in to Docker Hub
+              inputs:
+                command: login
+                containerRegistry: ${{ parameters.registry_service_connection_name }}
+            - ${{ each value in parameters.docker_architecture_names }}:
+              - task: Bash@3
+                displayName: Pull image for ${{ value }} architecture and append manifest
+                inputs:
+                  targetType: inline
+                  script: |
+                    docker pull ${{ parameters.docker_repository_name }}:${{ version.scala_version }}-${{ version.kafka_version }}-${{ replace(value,'/','') }}
+                    docker manifest create -a ${{ parameters.docker_repository_name }}:${{ version.scala_version }}-${{ version.kafka_version }} ${{ parameters.docker_repository_name }}:${{ version.scala_version }}-${{ version.kafka_version }}-${{ replace(value,'/','') }}
+            - task: Bash@3
+              displayName: Push Docker manifest
+              inputs:
+                targetType: inline
+                script: |
+                  docker manifest push ${{ parameters.docker_repository_name }}:${{ version.scala_version }}-${{ version.kafka_version }}

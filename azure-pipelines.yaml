@@ -1,0 +1,32 @@
+trigger:
+  branches:
+    include:
+      - master
+      - feature/multi-arch
+  batch: true
+
+variables:
+  - name: docker_repository_name
+    value: yardbirdsax/kafka
+  - name: docker_arch_name
+    value: arm64
+  - name: DOCKER_BUILDKIT
+    value: 1
+
+pool:
+  vmImage: ubuntu-20.04
+
+stages:
+  - template: pipeline-templates/build.yaml
+    parameters:
+      docker_repository_name: yardbirdsax/kafka
+      registry_service_connection_name: "Docker Hub"   
+      kafka_versions:
+        - kafka_version: 2.7.0
+          scala_version: 2.13
+        - kafka_version: 2.6.0
+          scala_version: 2.13
+        - kafka_version: 2.5.0
+          scala_version: 2.12
+        - kafka_version: 2.4.1
+          scala_version: 2.12        
